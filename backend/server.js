@@ -1,149 +1,78 @@
-import dotenv from 'dotenv';
-dotenv.config();
-import express from 'express';
-import axios from 'axios';
-import cors from 'cors';
+import express from "express";
+import axios from "axios";
+import cors from "cors";
 
 const app = express();
-app.use(cors());
+const PORT = 3000;
 
-// ==========================================
-// DEMO VE SUNUM AYARLARI (BURAYI DEĞİŞTİR)
-// ==========================================
-// Demo yapmak istiyorsan burayı 'true' yap.
-const DEMO_MODE = true; 
+app.use(cors()); 
 
-// Ekranda ne görmek istiyorsun? 'BUSY' (Kırmızı) veya 'AVAILABLE' (Yeşil)
-const DEMO_STATUS = 'BUSY'; 
-
-// ==========================================
-
-// Microsoft Graph Ayarları
-const CLIENT_ID = process.env.CLIENT_ID;
-const CLIENT_SECRET = process.env.CLIENT_SECRET;
-const TENANT_ID = process.env.TENANT_ID;
-const ROOM_EMAIL = process.env.ROOM_EMAIL || "toplanti.odasi@gtu.edu.tr"; 
-
-let tokenCache = {
-    token: null,
-    expiresAt: 0
-};
-
-// Access Token Alma Fonksiyonu
 async function getAccessToken() {
-    const now = Date.now();
-    if (tokenCache.token && now < tokenCache.expiresAt) {
-        return tokenCache.token;
-    }
-
-    const tokenEndpoint = `https://login.microsoftonline.com/${TENANT_ID}/oauth2/v2.0/token`;
-    const params = new URLSearchParams();
-    params.append('client_id', CLIENT_ID);
-    params.append('scope', 'https://graph.microsoft.com/.default');
-    params.append('client_secret', CLIENT_SECRET);
-    params.append('grant_type', 'client_credentials');
-
-    try {
-        const response = await axios.post(tokenEndpoint, params);
-        tokenCache.token = response.data.access_token;
-        tokenCache.expiresAt = now + (response.data.expires_in * 1000) - 30000;
-        console.log("Yeni Access Token alındı.");
-        return tokenCache.token;
-    } catch (error) {
-        console.error("Token hatası:", error.response ? error.response.data : error.message);
-        throw new Error("Microsoft Auth Failed");
-    }
+    // Credentials
+    const tenantId = '066690f2-a8a6-4889-852e-124371dcbd6f'; 
+    const url = `https://login.microsoftonline.com/${tenantId}/oauth2/v2.0/token`;
+  
+    const params = new URLSearchParams({
+      client_id: '04b36452-983e-4903-866c-936f4b655d60',
+      client_secret: 'whd8Q~lVxH4asu.z_pHRLFpfTJcoAO1H8IpL9aON', 
+      grant_type: "client_credentials",
+      scope: "https://graph.microsoft.com/.default"
+    });
+  
+    const response = await axios.post(url, params.toString(), {
+      headers: { "Content-Type": "application/x-www-form-urlencoded" }
+    });
+  
+    return response.data.access_token;
 }
 
-// ANA ENDPOINT
-app.get('/api/calendar', async (req, res) => {
-    console.log("İstek geldi...");
+app.get("/room-calendar", async (req, res) => {
+  try {
+    const token = await getAccessToken();
 
-    // 1. DEMO MODU
-    if (DEMO_MODE) {
-        console.log(`⚠️ DEMO MODU AKTİF: Durum -> ${DEMO_STATUS}`);
-        
-        const now = new Date();
-        const endTime = new Date(now.getTime() + 45 * 60000); 
+    const start = new Date();
+    start.setHours(0,0,0,0);
 
-        if (DEMO_STATUS === 'BUSY') {
-            return res.json({
-                status: "Busy",
-                currentMeeting: {
-                    subject: "Bitirme Projesi Jüri Sunumu",
-                    organizer: { 
-                        emailAddress: { name: "Ahmet Eren Arslan" } 
-                    },
-                    start: { dateTime: now.toISOString() },
-                    end: { dateTime: endTime.toISOString() }
-                },
-                nextMeetings: [
-                    {
-                        subject: "Bölüm Toplantısı",
-                        start: { dateTime: new Date(now.getTime() + 60 * 60000).toISOString() },
-                        end: { dateTime: new Date(now.getTime() + 120 * 60000).toISOString() }
-                    }
-                ]
-            });
-        } else {
-            return res.json({
-                status: "Available",
-                currentMeeting: null,
-                nextMeetings: [
-                    {
-                        subject: "Yarınki Planlama",
-                        start: { dateTime: new Date(now.getTime() + 24 * 60 * 60000).toISOString() },
-                        end: { dateTime: new Date(now.getTime() + 25 * 60 * 60000).toISOString() }
-                    }
-                ]
-            });
-        }
-    }
+    // Fetch next 30 days
+    const end = new Date();
+    end.setDate(end.getDate() + 30);
+    end.setHours(23,59,59,999);
 
-    // 2. GERÇEK MOD
-    try {
-        const token = await getAccessToken();
-        const eventsUrl = `https://graph.microsoft.com/v1.0/users/${ROOM_EMAIL}/calendar/events?$top=5&$orderby=start/dateTime`;
-        
-        const response = await axios.get(eventsUrl, {
-            headers: { Authorization: `Bearer ${token}` }
-        });
+    const ROOM_EMAIL = 'btetoplantiodasi@gtu.edu.tr';
 
-        const events = response.data.value;
-        const now = new Date();
-        let currentStatus = "Available";
-        let currentMeeting = null;
-        let nextMeetings = [];
+    const graphUrl =
+      `https://graph.microsoft.com/v1.0/users/${ROOM_EMAIL}/calendarView` +
+      `?startDateTime=${start.toISOString()}` +
+      `&endDateTime=${end.toISOString()}`;
 
-        for (let event of events) {
-            const start = new Date(event.start.dateTime);
-            const end = new Date(event.end.dateTime);
+    const graphRes = await axios.get(graphUrl, {
+      headers: { Authorization: `Bearer ${token}` }
+    });
 
-            if (now >= start && now <= end) {
-                currentStatus = "Busy";
-                currentMeeting = event;
-            } else if (start > now) {
-                nextMeetings.push(event);
-            }
-        }
+    console.log(`✅ Success: Fetched ${graphRes.data.value.length} events from Microsoft Graph.`);
+    res.json(graphRes.data.value);
+  
+  } catch (err) {
+    // Log minimal error info to server console
+    console.error("⚠️ API Error:", err.message);
+    
+    // Create a mock "System Event" to display error on tablet screen
+    const today = new Date();
+    const nextHour = new Date(today.getTime() + 60 * 60 * 1000); 
 
-        res.json({
-            status: currentStatus,
-            currentMeeting: currentMeeting,
-            nextMeetings: nextMeetings
-        });
-
-    } catch (error) {
-        console.error("Graph API Hatası:", error.message);
-        res.status(500).json({ error: "Veri çekilemedi" });
-    }
+    res.json([
+      {
+        id: "error-info",
+        subject: "⚠️ SYSTEM: Waiting for IT Approval", 
+        organizer: { emailAddress: { name: "IT Department" } },
+        // Remove 'Z' to avoid double-UTC issues on frontend
+        start: { dateTime: today.toISOString().slice(0, -1) },
+        end: { dateTime: nextHour.toISOString().slice(0, -1) }
+      }
+    ]);
+  }
 });
 
-app.get('/', (req, res) => {
-    res.send('Meeting Room Server is Running...');
-});
-
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-    console.log(`Server çalışıyor: Port ${PORT}`);
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`✅ Backend is running on port ${PORT}`);
 });
